@@ -1,0 +1,239 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "F9S",
+  "scopeName": "source.f9s",
+  "fileTypes": ["f9s"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#program_block" },
+    { "include": "#control_flow" },
+    { "include": "#type_declarations" },
+    { "include": "#print_stmt" },
+    { "include": "#assign_stmt" },
+    { "include": "#logical_literals" },
+    { "include": "#string_literals" },
+    { "include": "#numeric_literals" },
+    { "include": "#operators" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+
+    "comments": {
+      "name": "comment.line.exclamation.f9s",
+      "begin": "!",
+      "end": "$",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.comment.f9s" }
+      }
+    },
+
+    "program_block": {
+      "patterns": [
+        {
+          "comment": "END PROGRAM name",
+          "name": "meta.block.end.f9s",
+          "match": "(?i)\\b(END\\s+PROGRAM)\\b(\\s+([A-Za-z_][A-Za-z0-9_]*))?",
+          "captures": {
+            "1": { "name": "keyword.control.end.f9s" },
+            "3": { "name": "entity.name.function.f9s" }
+          }
+        },
+        {
+          "comment": "END IF",
+          "match": "(?i)\\b(END\\s+IF)\\b",
+          "captures": {
+            "1": { "name": "keyword.control.end.f9s" }
+          }
+        },
+        {
+          "comment": "END DO",
+          "match": "(?i)\\b(END\\s+DO)\\b",
+          "captures": {
+            "1": { "name": "keyword.control.end.f9s" }
+          }
+        },
+        {
+          "comment": "END (bare)",
+          "match": "(?i)^\\s*(END)\\s*$",
+          "captures": {
+            "1": { "name": "keyword.control.end.f9s" }
+          }
+        },
+        {
+          "comment": "PROGRAM name",
+          "name": "meta.block.program.f9s",
+          "match": "(?i)\\b(PROGRAM)\\b\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.program.f9s" },
+            "2": { "name": "entity.name.function.f9s" }
+          }
+        }
+      ]
+    },
+
+    "control_flow": {
+      "patterns": [
+        {
+          "comment": "ELSE IF (condition) THEN — must come before bare ELSE",
+          "match": "(?i)\\b(ELSE\\s+IF)\\b(\\s*\\()(.*?)(\\))(\\s*)(THEN)\\b",
+          "captures": {
+            "1": { "name": "keyword.control.conditional.f9s" },
+            "2": { "name": "punctuation.section.parens.begin.f9s" },
+            "3": { "name": "meta.condition.f9s" },
+            "4": { "name": "punctuation.section.parens.end.f9s" },
+            "6": { "name": "keyword.control.conditional.f9s" }
+          }
+        },
+        {
+          "comment": "IF (condition) THEN",
+          "match": "(?i)\\b(IF)\\b(\\s*\\()(.*?)(\\))(\\s*)(THEN)\\b",
+          "captures": {
+            "1": { "name": "keyword.control.conditional.f9s" },
+            "2": { "name": "punctuation.section.parens.begin.f9s" },
+            "3": { "name": "meta.condition.f9s" },
+            "4": { "name": "punctuation.section.parens.end.f9s" },
+            "6": { "name": "keyword.control.conditional.f9s" }
+          }
+        },
+        {
+          "comment": "ELSE (bare)",
+          "match": "(?i)^\\s*(ELSE)\\s*$",
+          "captures": {
+            "1": { "name": "keyword.control.conditional.f9s" }
+          }
+        },
+        {
+          "comment": "DO i = start, end  (with optional step)",
+          "match": "(?i)\\b(DO)\\b\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(=)",
+          "captures": {
+            "1": { "name": "keyword.control.loop.f9s" },
+            "2": { "name": "variable.other.loop.f9s" },
+            "3": { "name": "keyword.operator.assignment.f9s" }
+          }
+        },
+        {
+          "comment": "STOP",
+          "match": "(?i)\\b(STOP)\\b",
+          "captures": {
+            "1": { "name": "keyword.control.flow.f9s" }
+          }
+        }
+      ]
+    },
+
+    "type_declarations": {
+      "comment": "INTEGER x := 42  /  REAL pi := 3.14  /  LOGICAL flag := .TRUE.  etc.",
+      "match": "(?i)\\b(INTEGER|REAL|LOGICAL|CHARACTER|STRING|COMPLEX)\\b\\s+([A-Za-z_][A-Za-z0-9_]*)(?:\\s*(:=))?",
+      "captures": {
+        "1": { "name": "storage.type.f9s" },
+        "2": { "name": "variable.other.f9s" },
+        "3": { "name": "keyword.operator.assignment.f9s" }
+      }
+    },
+
+    "print_stmt": {
+      "patterns": [
+        {
+          "comment": "PRINT *, expr",
+          "match": "(?i)\\b(PRINT)\\b\\s*(\\*)\\s*(,)?",
+          "captures": {
+            "1": { "name": "keyword.other.print.f9s" },
+            "2": { "name": "keyword.operator.f9s" },
+            "3": { "name": "punctuation.separator.f9s" }
+          }
+        },
+        {
+          "comment": "PRINT expr",
+          "match": "(?i)\\b(PRINT)\\b",
+          "captures": {
+            "1": { "name": "keyword.other.print.f9s" }
+          }
+        }
+      ]
+    },
+
+    "assign_stmt": {
+      "comment": "ASSIGN x, 42",
+      "match": "(?i)\\b(ASSIGN)\\b",
+      "captures": {
+        "1": { "name": "keyword.other.assign.f9s" }
+      }
+    },
+
+    "logical_literals": {
+      "name": "constant.language.logical.f9s",
+      "match": "(?i)\\.TRUE\\.|.FALSE\\."
+    },
+
+    "string_literals": {
+      "name": "string.quoted.double.f9s",
+      "begin": "\"",
+      "end": "\"",
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.f9s" } },
+      "endCaptures":   { "0": { "name": "punctuation.definition.string.end.f9s" } },
+      "patterns": [
+        {
+          "name": "constant.character.escape.f9s",
+          "match": "\\\\[\"\\\\nrt]"
+        }
+      ]
+    },
+
+    "numeric_literals": {
+      "patterns": [
+        {
+          "comment": "Real / floating-point literal",
+          "name": "constant.numeric.float.f9s",
+          "match": "(?<![A-Za-z0-9_])[+-]?[0-9]+\\.[0-9]*(?:[eEdD][+-]?[0-9]+)?(?![A-Za-z0-9_])"
+        },
+        {
+          "comment": "Integer literal",
+          "name": "constant.numeric.integer.f9s",
+          "match": "(?<![A-Za-z0-9_])[+-]?[0-9]+(?![A-Za-z0-9_.])"
+        }
+      ]
+    },
+
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.assignment.f9s",
+          "match": ":="
+        },
+        {
+          "name": "keyword.operator.comparison.f9s",
+          "match": "(?i)\\.EQ\\.|.NE\\.|.LT\\.|.LE\\.|.GT\\.|.GE\\.|==|/=|<=|>=|<(?![<=])|>(?![>=])"
+        },
+        {
+          "name": "keyword.operator.logical.f9s",
+          "match": "(?i)\\.AND\\.|.OR\\.|.NOT\\.|.XOR\\."
+        },
+        {
+          "name": "keyword.operator.arithmetic.f9s",
+          "match": "[+\\-*/]"
+        },
+        {
+          "name": "keyword.operator.assignment.f9s",
+          "match": "(?<!=)=(?!=)"
+        },
+        {
+          "name": "punctuation.separator.comma.f9s",
+          "match": ","
+        },
+        {
+          "name": "punctuation.section.parens.begin.f9s",
+          "match": "\\("
+        },
+        {
+          "name": "punctuation.section.parens.end.f9s",
+          "match": "\\)"
+        }
+      ]
+    },
+
+    "identifiers": {
+      "name": "variable.other.f9s",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+    }
+  }
+}

@@ -1,0 +1,136 @@
+{
+  "name": "vscode-f9s",
+  "displayName": "F9S — FORTRAN 95 Subset",
+  "description": "Language support for F9S (FORTRAN 95 Subset): syntax highlighting, snippets, hover docs and build tasks.",
+  "version": "0.1.0",
+  "publisher": "f9s",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "keywords": [
+    "fortran",
+    "f9s",
+    "assembly",
+    "nasm"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "f9s",
+        "aliases": [
+          "F9S",
+          "FORTRAN 95 Subset",
+          "f9s"
+        ],
+        "extensions": [
+          ".f9s"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "f9s",
+        "scopeName": "source.f9s",
+        "path": "./syntaxes/f9s.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "f9s",
+        "path": "./snippets/f9s.json"
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "f9s",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The F9S command to run (.load or .build)"
+          },
+          "file": {
+            "type": "string",
+            "description": "The .f9s source file"
+          }
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "f9s.buildFile",
+        "title": "F9S: Build Current File",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "f9s.runFile",
+        "title": "F9S: Run Current File",
+        "icon": "$(play)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "when": "resourceExtname == .f9s",
+          "command": "f9s.runFile",
+          "group": "navigation"
+        },
+        {
+          "when": "resourceExtname == .f9s",
+          "command": "f9s.buildFile",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "when": "resourceExtname == .f9s",
+          "command": "f9s.runFile",
+          "group": "f9s@1"
+        },
+        {
+          "when": "resourceExtname == .f9s",
+          "command": "f9s.buildFile",
+          "group": "f9s@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "F9S",
+      "properties": {
+        "f9s.replExecutable": {
+          "type": "string",
+          "default": "bin\\program.exe",
+          "description": "Path to the F9S REPL/compiler executable (relative to workspace root or absolute)."
+        },
+        "f9s.workspaceRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Override the workspace root used when invoking the compiler (defaults to the first workspace folder)."
+        }
+      }
+    }
+  },
+  "activationEvents": [
+    "onLanguage:f9s"
+  ],
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^2.22.0"
+  }
+}

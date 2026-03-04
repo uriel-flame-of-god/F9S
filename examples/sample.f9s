@@ -1,0 +1,47 @@
+PROGRAM sample
+    INTEGER total := 0
+
+    INTEGER n := 5
+    INTEGER total := 0
+
+    ! DO loop — sum 1..n
+    DO i = 1, n
+        total = total + i
+    END DO
+
+    PRINT *, total          ! 15
+
+    ! IF / ELSE / END IF
+    IF (total > 10) THEN
+        PRINT *, total
+    ELSE
+        PRINT *, 0
+    END IF
+
+    ! Comparison operators
+    IF (n == 5) THEN
+        PRINT *, 1
+    END IF
+
+    IF (n /= 99) THEN
+        PRINT *, 1
+    END IF
+
+    IF (n <= 5) THEN
+        PRINT *, 1
+    END IF
+
+    IF (n >= 5) THEN
+        PRINT *, 1
+    END IF
+
+    IF (n < 10) THEN
+        PRINT *, 1
+    END IF
+
+    IF (n > 0) THEN
+        PRINT *, 1
+    END IF
+
+    STOP
+END PROGRAM sample
