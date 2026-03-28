@@ -50,13 +50,14 @@ Build **F9S**, a FORTRAN 95 Subset compiler targeting x86-64 Windows. Written pr
 - [ ] `ELSE IF (condition) THEN` chained branches
 - [ ] Bare `ELSE` without requiring `THEN` on the same line
 
-### Phase 6 — Arrays & Hashmaps
-- [ ] Array declarations (`INTEGER :: arr(10)`)
-- [ ] Array indexing
-- [ ] Implied DO loops in I/O
-- [ ] Hashmap declarations (`HASHMAP :: map`)
-- [ ] Hashmap insert / lookup (`map(key) := value`, `map(key)`)
-- [ ] String and integer keys
+### Phase 6 — Arrays & Hashmaps ✅
+- [x] Array declarations (`INTEGER :: arr(10)`)
+- [x] Array indexing — `arr(i) = expr` (assign) and `arr(i)` (rvalue)
+- [x] Implied DO loops in I/O — `PRINT *, (arr(i), i=1,n)`
+- [x] Hashmap declarations (`HASHMAP :: map`)
+- [x] Hashmap insert / lookup (`map(key) := value`, `map(key)`)
+- [x] Integer keys; open-addressing, 64-slot BSS layout
+- [x] Codegen: `_f9s_hm_insert` / `_f9s_hm_lookup` runtime emitted inline
 
 ### Phase 7 — Polish
 - [ ] Missing features identified during testing

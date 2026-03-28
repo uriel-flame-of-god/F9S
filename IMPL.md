@@ -51,16 +51,13 @@ bin/             — final executable
     write_str("F9S> ")
     read_line(namebuf, 128)
     if namebuf[0] == 0 → .loop
-    
-    ; Check for .load command
+
     r = handle_load_command(namebuf)
     if r != -1 → .loop  ; handled
-    
-    ; Check for .build command  
+
     r = handle_build_command(namebuf)
     if r != -1 → .loop  ; handled
-    
-    ; Calculator fallback
+
     if is_exit(namebuf) → .exit
     r = compute(namebuf, feature_flags, &result)
     ; ... dispatch on error codes
@@ -73,8 +70,6 @@ bin/             — final executable
 
 ### `src/c/load.c`
 
-Command parsing and execution handled entirely in C:
-
 | Function | Description |
 |---|---|
 | `handle_load_command(line)` | Parse `.load <file>`, compile+run. Returns 0=OK, -1=not a .load, -2=error |
@@ -82,8 +77,6 @@ Command parsing and execution handled entirely in C:
 | `load_file(filename, table)` | Compile `.f9s` and execute resulting `.exe` |
 
 ### `src/c/build.c`
-
-Core compilation pipeline:
 
 | Function | Description |
 |---|---|
@@ -108,115 +101,196 @@ AVL tree implementation for O(log n) symbol lookup.
 |---|---|
 | `symbol_table_create()` | Allocate empty table |
 | `symbol_table_destroy()` | Free all nodes |
-| `symbol_insert(table, name, type)` | Insert/update variable |
+| `symbol_insert(table, name, type, value)` | Insert or update variable |
 | `symbol_lookup(table, name)` | Find variable by name |
-| `symbol_set_value(sym, val, type)` | Set typed value |
 
-Type-safe storage: `int_val`, `real_val`, `string_val`, `logical_val`, `complex_val`.
+Type-safe storage: `int_val`, `real_val`, `string_val`, `complex_val`.
 
 ---
 
 ## Parser — `src/c/parser.c`
 
-Recursive descent parser for F9S grammar.
+Recursive descent parser for the F9S grammar.
 
 ### Lexer tokens
-- `TOK_PROGRAM`, `TOK_END`, `TOK_PRINT`, `TOK_INTEGER`, `TOK_REAL`, `TOK_LOGICAL`
-- `TOK_IF`, `TOK_THEN`, `TOK_ELSE`, `TOK_DO`, `TOK_STOP`
-- `TOK_IDENTIFIER`, `TOK_INT_LIT`, `TOK_REAL_LIT`, `TOK_STRING_LIT`, `TOK_LOGICAL_LIT`
-- Arithmetic: `TOK_PLUS`, `TOK_MINUS`, `TOK_STAR`, `TOK_SLASH`, `TOK_EQUALS`
+
+- Keywords: `TOK_KW_PROGRAM`, `TOK_KW_END`, `TOK_KW_PRINT`, `TOK_KW_INTEGER`, `TOK_KW_REAL`, `TOK_KW_LOGICAL`, `TOK_KW_IF`, `TOK_KW_THEN`, `TOK_KW_ELSE`, `TOK_KW_DO`, `TOK_KW_STOP`, `TOK_KW_HASHMAP`
+- Literals: `TOK_INT_LIT`, `TOK_REAL_LIT`, `TOK_STRING_LIT`, `TOK_LOGICAL_LIT`, `TOK_COMPLEX_LIT`
+- Punctuation: `TOK_DCOLON` (`::`), `TOK_ASSIGN_OP` (`:=`), `TOK_EQUALS` (`=`), `TOK_COMMA`, `TOK_LPAREN`, `TOK_RPAREN`
 - Comparison: `TOK_EQ` (`==`), `TOK_NE` (`/=`), `TOK_LT` (`<`), `TOK_GT` (`>`), `TOK_LE` (`<=`), `TOK_GE` (`>=`)
-- `TOK_DCOLON` (`::`), `TOK_COMMA`, `TOK_LPAREN`, `TOK_RPAREN`
 
 ### Grammar (subset)
+
 ```
-program     → PROGRAM name NEWLINE stmt* END PROGRAM name
-stmt        → declaration | assignment | print_stmt
-            | if_stmt | do_stmt | stop_stmt
-declaration → type_spec DCOLON var_list
-assignment  → IDENTIFIER EQUALS expr
-print_stmt  → PRINT STAR COMMA expr
-if_stmt     → IF LPAREN condition RPAREN THEN NEWLINE
-                  stmt*
-              [ ELSE NEWLINE stmt* ]
-              END IF
-do_stmt     → DO IDENTIFIER EQUALS expr COMMA expr [ COMMA expr ] NEWLINE
-                  stmt*
-              END DO
-stop_stmt   → STOP
-condition   → expr rel_op expr
-rel_op      → == | /= | < | > | <= | >=
-expr        → term ((PLUS|MINUS) term)*
-term        → factor ((STAR|SLASH) factor)*
-factor      → literal | IDENTIFIER | LPAREN expr RPAREN
+program      → PROGRAM name NEWLINE stmt* END PROGRAM name
+stmt         → type_decl | array_decl | hashmap_decl
+             | assign_implicit | array_assign | hashmap_insert
+             | print_stmt | if_stmt | do_stmt | stop_stmt
+type_decl    → type '::' IDENT ':=' expr
+array_decl   → type '::' IDENT '(' INT_LIT ')'
+hashmap_decl → HASHMAP '::' IDENT
+assign_implt → IDENT '=' expr
+array_assign → IDENT '(' expr ')' '=' expr
+hashmap_ins  → IDENT '(' expr ')' ':=' expr
+print_stmt   → PRINT '*' ',' (expr | implied_do)
+implied_do   → '(' expr ',' IDENT '=' expr ',' expr [',' expr] ')'
+if_stmt      → IF '(' cond ')' THEN NEWLINE stmt* [ELSE NEWLINE stmt*] END IF
+do_stmt      → DO IDENT '=' expr ',' expr [',' expr] NEWLINE stmt* END DO
+stop_stmt    → STOP
+condition    → expr rel_op expr
+expr         → term (('+' | '-') term)*
+term         → factor (('*' | '/') factor)*
+factor       → literal | IDENT | IDENT '(' expr ')' | '(' expr ')'
 ```
+
+### Implied-DO detection
+
+`looks_like_implied_do()` saves the lexer state, speculatively scans for the `, IDENT =` pattern inside `(...)`, then restores state without consuming any tokens. This avoids grammar ambiguity without backtracking overhead.
 
 ---
 
 ## Code Generator — `src/c/codegen.c`
 
-Emits NASM x64 targeting Windows calling convention.
+Emits NASM x64 targeting the Windows calling convention.
 
 ### Type support
+
 | Type | Storage | Print format |
 |---|---|---|
-| INTEGER | 64-bit signed | `%lld` |
-| REAL | 64-bit double (SSE) | `%f` |
+| INTEGER | 64-bit signed (`resq 1`) | `%lld` |
+| REAL | 64-bit double (SSE2) | `%f` |
 | LOGICAL | 64-bit (0/1) | `.TRUE.`/`.FALSE.` |
-| STRING | pointer | `%s` |
+| STRING | pointer to `.data` label | `%s` |
 
-### Control flow
+### Phase 6 additions
+
+#### Arrays
+
+- **BSS**: `arr_<name> resq <size>` (emitted by `cg_emit_bss_vars`)
+- **1-based indexing**: codegen subtracts 1 from index, multiplies by 8 for byte offset
+
+Array assign (`arr(i) = expr`):
+```nasm
+; compute value → push rax
+; compute index → dec rax; shl rax, 3
+lea rcx, [rel arr_<name>]
+pop rbx
+mov [rcx + rax], rbx
+```
+
+Array ref (`arr(i)` as rvalue):
+```nasm
+; compute index → dec rax; shl rax, 3
+lea rcx, [rel arr_<name>]
+mov rax, [rcx + rax]
+```
+
+#### Hashmaps
+
+- **BSS**: `hm_<name> resb 2048` (64 slots × 32 bytes)
+- **Slot layout**: `key(8), value(8), used(8), padding(8)`
+- **Hash function**: `slot = key & 63` with linear probing
+
+Hashmap insert (`map(k) := v`):
+```nasm
+; compute key → push rax
+; compute value → mov r8, rax
+pop rdx
+lea rcx, [rel hm_<name>]
+sub rsp, 32
+call _f9s_hm_insert
+add rsp, 32
+```
+
+Hashmap lookup (`map(k)` as rvalue):
+```nasm
+; compute key → mov rdx, rax
+lea rcx, [rel hm_<name>]
+sub rsp, 32
+call _f9s_hm_lookup
+add rsp, 32
+; result in rax
+```
+
+The runtime helpers `_f9s_hm_insert` / `_f9s_hm_lookup` are emitted inline into the generated `.asm` file (by `cg_emit_hashmap_runtime`) when any hashmap is declared.
+
+#### Implied DO
+
+```nasm
+; initialise loop variable
+mov rax, <start>
+mov [rel var_<i>], rax
+.<top>:
+    cmp [rel var_<i>], <end>
+    jg .<end>
+    ; gen_expr(expr) + emit printf
+    ; increment
+    mov rax, [rel var_<i>]
+    add rax, <step>
+    mov [rel var_<i>], rax
+    jmp .<top>
+.<end>:
+```
+
+### Control flow patterns
+
 | Construct | Emitted NASM pattern |
 |---|---|
 | `IF … THEN … END IF` | `cmp` + conditional jump to end label |
-| `IF … THEN … ELSE … END IF` | `cmp` + jump to else label; unconditional jump over else |
-| `DO i = start, stop [, step]` | init → `cmp` at top; `jg` to exit; body; `add`/`sub` + `jmp` back |
+| `IF … THEN … ELSE … END IF` | `cmp` + jump to else; unconditional jump over else |
+| `DO i = start, stop [, step]` | init → `cmp` at top; `jg` to exit; body; add/sub + `jmp` back |
 | `STOP` | `xor ecx, ecx` + `call ExitProcess` |
 
-### Key functions
-- `generate_code(ast, filename)` — main entry point
-- `gen_stmt(node)` — dispatch by statement type
-- `gen_expr(node)` — recursive expression evaluation
-- `gen_condition(node)` — emit `cmp` and return the appropriate `jcc` mnemonic
-- `infer_expr_type(node)` — determine result type for proper handling
-
 ### Windows x64 printf quirk
-For REAL values, must set **both** `xmm1` and `rdx`:
+
+For REAL values, both `xmm1` and `rdx` must be set:
 ```nasm
 movsd xmm1, xmm0      ; for printf's %f
-movq rdx, xmm0        ; for Windows varargs
+movq  rdx,  xmm0      ; integer mirror for Windows varargs
 ```
 
-### Label naming
-Labels are emitted as `.Lif<N>_else`, `.Lif<N>_end`, `.Ldo<N>_top`, `.Ldo<N>_end`
-where `N` is a per-function counter incremented for each construct.
+---
+
+## Codegen Helpers — `src/c/codegen_helpers.c`
+
+| Function | Description |
+|---|---|
+| `cg_emit_data_literals(root, out)` | Scan AST for REAL literals, emit `_rcN dq …` |
+| `cg_emit_data_strings(root, out)` | Scan AST for STRING literals, emit `_strN db …` |
+| `cg_emit_bss_vars(root, out)` | Walk stmts, emit `var_/arr_/hm_` BSS entries |
+| `cg_register_array(name, size, type)` | Register array in internal registry |
+| `cg_register_hashmap(name)` | Register hashmap in internal registry |
+| `cg_is_array(name)` | Query: is this name an array? |
+| `cg_is_hashmap(name)` | Query: is this name a hashmap? |
+| `cg_array_elem_type(name)` | Get array element type |
+| `cg_emit_hashmap_runtime(out)` | Emit `_f9s_hm_insert` / `_f9s_hm_lookup` |
+| `cg_helpers_reset()` | Reset all registries before each compilation |
 
 ---
 
 ## Error Handling — `src/c/error_handler.c`
 
-**Pat/Slap** diagnostic system:
-
 | Function | Severity | Effect |
 |---|---|---|
 | `pat(fmt, ...)` | Warning | Increment `g_pat_count`, print yellow |
-| `slap(fmt, ...)` | Error | Increment `g_slap_count`, print red |
-| `slap_occurred()` | Query | Returns true if any slaps |
-| `reset_diagnostics()` | Reset | Clear both counters |
-| `print_pat_summary()` | Report | Print "N pats, M slaps" if any |
+| `slap(fmt, ...)` | Error | Increment `g_slap_count`, set flag, print red |
+| `slap_occurred()` | Query | Returns 1 if any slaps since last reset |
+| `reset_diagnostics()` | Reset | Clear both counters and slap flag |
+| `print_pat_summary()` | Report | Print warning count if > 0 |
 
 ---
 
 ## Type Conversion — `src/c/assignment.c`
 
-`convert_value(src, src_type, dest_type)` — converts between types with pat/slap policy:
+`convert_value(dest, dest_type, src, src_type, &pat_count)`:
 
 | From → To | Behavior |
 |---|---|
-| INT → REAL | Lossless |
-| REAL → INT | Truncates, **pat** if precision lost |
-| STRING → INT/REAL | Parse, **slap** if invalid |
-| LOGICAL → INT | `.TRUE.` = 1, `.FALSE.` = 0 |
+| INT → REAL | Widening (pat) |
+| REAL → INT | Truncation (pat) |
+| STRING → INT/REAL | Parse at compile time; slap if invalid |
+| LOGICAL → INT | `.TRUE.` = 1, `.FALSE.` = 0 (pat) |
+| Any → STRING | Always slap |
 
 ---
 
@@ -229,12 +303,12 @@ F9S> .load hello.f9s
     │     ├─ extract_filename()  → parse ".load hello.f9s"
     │     └─ load_file()
     │           ├─ compile_f9s() → src/c/build.c
-    │           │     ├─ parse_program()      → parser.c
-    │           │     ├─ semantic_analysis()  → parser.c
-    │           │     ├─ generate_code()      → codegen.c
+    │           │     ├─ parse_program()      → parser.c  (AST)
+    │           │     ├─ semantic_analysis()  → parser.c  (symbol resolution)
+    │           │     ├─ generate_code()      → codegen.c (NASM emission)
     │           │     ├─ system("nasm ...")   → hello.obj
     │           │     └─ system("clang ...")  → hello.exe
-    │           └─ system("hello.exe")        → run output
+    │           └─ system("hello.exe")        → program output
     │
     └─ [SUCCESS] Compiled hello.f9s -> hello.exe
        [LOG] Running hello.exe...

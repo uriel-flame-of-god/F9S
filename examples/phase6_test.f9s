@@ -1,0 +1,25 @@
+PROGRAM phase6test
+    INTEGER :: arr(5)
+    INTEGER i := 0
+
+    ! Fill array
+    arr(1) = 10
+    arr(2) = 20
+    arr(3) = 30
+    arr(4) = 40
+    arr(5) = 50
+
+    ! Print using implied DO
+    PRINT *, (arr(i), i=1,5)
+
+    ! Hashmap test
+    HASHMAP :: scores
+    scores(1) := 100
+    scores(2) := 200
+    scores(3) := 300
+
+    PRINT *, scores(1)
+    PRINT *, scores(2)
+    PRINT *, scores(3)
+
+END PROGRAM phase6test

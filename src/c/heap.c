@@ -1,3 +1,15 @@
+/**
+ * @file heap.c
+ * @brief AVL-tree symbol table implementation.
+ *
+ * Stores compiler variables as nodes in a self-balancing BST keyed by name.
+ * All four AVL rotations (LL, LR, RL, RR) are handled by `avl_rebalance()`.
+ * Lookup is O(log n); insert is O(log n) amortised.
+ *
+ * String values are heap-allocated on insert and freed on update/destroy
+ * to prevent memory leaks.
+ */
+
 // F9S - FORTRAN 95 Subset Compiler
 // Copyright (C) 2026 Debaditya Malakar
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -7,14 +19,17 @@
 
 #include "symbol.h"
 
+/** @brief Return the AVL height of a node (0 for NULL). */
 static int avl_height(const struct symbol *n) {
     return n ? n->height : 0;
 }
 
+/** @brief Return the balance factor of a node (left_height - right_height). */
 static int avl_balance_factor(const struct symbol *n) {
     return n ? avl_height(n->left) - avl_height(n->right) : 0;
 }
 
+/** @brief Recompute the stored height of a node from its children. */
 static void avl_update_height(struct symbol *n) {
     if (!n) return;
     int lh = avl_height(n->left);
@@ -22,13 +37,19 @@ static void avl_update_height(struct symbol *n) {
     n->height = 1 + (lh > rh ? lh : rh);
 }
 
-/* Right rotation around y:
+/**
+ * @brief Right rotation around `y`.
  *
+ * @code
  *       y              x
  *      / \            / \
  *     x   T3   =>   T1   y
  *    / \                / \
  *   T1  T2            T2   T3
+ * @endcode
+ *
+ * @param y Subtree root to rotate.
+ * @return New subtree root (`x`).
  */
 static struct symbol *avl_rotate_right(struct symbol *y) {
     struct symbol *x  = y->left;
@@ -42,13 +63,19 @@ static struct symbol *avl_rotate_right(struct symbol *y) {
     return x;
 }
 
-/* Left rotation around x:
+/**
+ * @brief Left rotation around `x`.
  *
+ * @code
  *     x                y
  *    / \              / \
  *   T1   y    =>    x    T3
  *       / \        / \
  *      T2  T3    T1   T2
+ * @endcode
+ *
+ * @param x Subtree root to rotate.
+ * @return New subtree root (`y`).
  */
 static struct symbol *avl_rotate_left(struct symbol *x) {
     struct symbol *y  = x->right;
@@ -62,7 +89,14 @@ static struct symbol *avl_rotate_left(struct symbol *x) {
     return y;
 }
 
-/* Rebalance after an insert; returns the (possibly new) subtree root */
+/**
+ * @brief Rebalance a subtree after an insertion.
+ *
+ * Handles all four imbalance cases (LL, LR, RL, RR).
+ *
+ * @param node Subtree root to rebalance.
+ * @return Potentially new subtree root.
+ */
 static struct symbol *avl_rebalance(struct symbol *node) {
     avl_update_height(node);
 
@@ -85,10 +119,15 @@ static struct symbol *avl_rebalance(struct symbol *node) {
     return node;  /* already balanced */
 }
 
-/* ------------------------------------------------------------------ */
-/*  Copy a value into an existing symbol node.                        */
-/*  Frees any previously held string so there are no leaks.          */
-/* ------------------------------------------------------------------ */
+/**
+ * @brief Copy a value into an existing symbol node.
+ *
+ * Frees any previously held string to prevent leaks before overwriting.
+ *
+ * @param sym   Target symbol node.
+ * @param type  New type kind.
+ * @param value Pointer to value data, or NULL for zero-initialisation.
+ */
 static void symbol_set_value(struct symbol *sym,
                              enum type_kind  type,
                              void           *value) {
@@ -110,11 +149,7 @@ static void symbol_set_value(struct symbol *sym,
         break;
     case TYPE_STRING:
     case TYPE_CHARACTER:
-        if (value) {
-            sym->value.string_value = strdup((const char *)value);
-        } else {
-            sym->value.string_value = strdup("");
-        }
+        sym->value.string_value = strdup(value ? (const char *)value : "");
         break;
     case TYPE_LOGICAL:
         sym->value.int_value = value ? (*(long long *)value ? 1LL : 0LL) : 0LL;
@@ -137,17 +172,25 @@ static void symbol_set_value(struct symbol *sym,
     }
 }
 
-/* ------------------------------------------------------------------ */
-/*  Recursive insert; returns potentially new subtree root.          */
-/*  *inserted_sym is set to the node with the given name.            */
-/* ------------------------------------------------------------------ */
+/**
+ * @brief Recursive AVL insert.
+ *
+ * On duplicate keys the existing node is updated in place (no rebalance).
+ * `*inserted_sym` is set to the node carrying `name` on return.
+ *
+ * @param node         Current subtree root (may be NULL).
+ * @param name         Key to insert.
+ * @param type         Type kind for the new or updated value.
+ * @param value        Pointer to value data, or NULL.
+ * @param inserted_sym Receives pointer to the inserted/updated node.
+ * @return Potentially new subtree root.
+ */
 static struct symbol *avl_insert(struct symbol   *node,
                                  const char       *name,
                                  enum type_kind    type,
                                  void             *value,
                                  struct symbol   **inserted_sym) {
     if (!node) {
-        /* Allocate a new leaf */
         struct symbol *s = calloc(1, sizeof(*s));
         if (!s) {
             *inserted_sym = NULL;
@@ -155,8 +198,6 @@ static struct symbol *avl_insert(struct symbol   *node,
         }
         s->name   = strdup(name);
         s->height = 1;
-        s->left   = NULL;
-        s->right  = NULL;
         symbol_set_value(s, type, value);
         *inserted_sym = s;
         return s;
@@ -169,18 +210,20 @@ static struct symbol *avl_insert(struct symbol   *node,
     } else if (cmp > 0) {
         node->right = avl_insert(node->right, name, type, value, inserted_sym);
     } else {
-        /* Key already exists — update in place */
+        /* Key already exists — update in place, no structural change */
         symbol_set_value(node, type, value);
         *inserted_sym = node;
-        return node;  /* no structural change, no rebalance needed */
+        return node;
     }
 
     return avl_rebalance(node);
 }
 
-/* ------------------------------------------------------------------ */
-/*  Recursive free                                                    */
-/* ------------------------------------------------------------------ */
+/**
+ * @brief Recursively free an AVL subtree, including heap-allocated strings.
+ *
+ * @param node Subtree root to free (NULL is safe).
+ */
 static void avl_free(struct symbol *node) {
     if (!node) return;
     avl_free(node->left);
@@ -194,12 +237,11 @@ static void avl_free(struct symbol *node) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Public API                                                        */
+/*  Public API                                                         */
 /* ------------------------------------------------------------------ */
 
 struct symbol_table *symbol_table_create(void) {
-    struct symbol_table *t = calloc(1, sizeof(*t));
-    return t;
+    return calloc(1, sizeof(struct symbol_table));
 }
 
 void symbol_table_destroy(struct symbol_table *table) {
@@ -219,9 +261,9 @@ struct symbol *symbol_insert(struct symbol_table *table,
 
     table->root = avl_insert(table->root, name, type, initial_value, &inserted);
 
-    if (inserted && was_new) {
+    if (inserted && was_new)
         table->count++;
-    }
+
     return inserted;
 }
 

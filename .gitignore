@@ -11,3 +11,4 @@ test*.*
 *demo.*
 vscode-f9s/node_modules/
 vscode-f9s/out/
+.claude/

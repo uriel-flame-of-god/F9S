@@ -1,9 +1,15 @@
+/**
+ * @file log.c
+ * @brief ANSI-colour terminal logging implementation.
+ */
+
 // F9S - FORTRAN 95 Subset Compiler
 // Copyright (C) 2026 Debaditya Malakar
 // SPDX-License-Identifier: AGPL-3.0-only
 
 #include <stdio.h>
 
+/** @brief ANSI Control Sequence Introducer. */
 #define CSI "\x1b["
 
 void log_info(const char *msg) {

@@ -1,3 +1,12 @@
+/**
+ * @file error_handler.c
+ * @brief Pat/Slap diagnostic system implementation.
+ *
+ * `pat()` issues a warning; `slap()` records a fatal error.  Both accept
+ * `printf`-style format strings and prepend an optional source-location
+ * prefix when a context has been attached with `set_error_context()`.
+ */
+
 // F9S - FORTRAN 95 Subset Compiler
 // Copyright (C) 2026 Debaditya Malakar
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -16,7 +25,14 @@ static int                  s_slap_flag = 0;
 static struct error_context s_ctx       = {0};
 static int                  s_has_ctx   = 0;
 
-/* Build a location prefix like "foo.f9s:12: " when context is set */
+/**
+ * @brief Build a location prefix string (e.g. `"foo.f9s:12: "`).
+ *
+ * Writes an empty string into `buf` when no context is set.
+ *
+ * @param buf Output buffer.
+ * @param cap Capacity of `buf` in bytes.
+ */
 static void build_location(char *buf, size_t cap) {
     if (!s_has_ctx || !s_ctx.filename) {
         buf[0] = '\0';
@@ -59,7 +75,7 @@ void slap(const char *format, ...) {
     char loc[128];
     build_location(loc, sizeof(loc));
 
-    /* Show the offending line if available */
+    /* Show the offending source line when available */
     if (s_has_ctx && s_ctx.line_content && s_ctx.line_content[0]) {
         char src[256];
         snprintf(src, sizeof(src), "  --> %s", s_ctx.line_content);

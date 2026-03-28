@@ -1,3 +1,13 @@
+/**
+ * @file build.c
+ * @brief Compilation pipeline: parse → semantic analysis → codegen → assemble → link.
+ *
+ * `compile_f9s` is the single backend that drives every compilation.
+ * It reads the source file into memory, runs the parser, semantic analyser,
+ * and code generator, then shells out to NASM and Clang to produce a
+ * native Windows x64 executable.
+ */
+
 // F9S - FORTRAN 95 Subset Compiler
 // Copyright (C) 2026 Debaditya Malakar
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -7,13 +17,13 @@
 #include <string.h>
 
 #include "build.h"
-#include "parser.h"
-#include "error_handler.h"
 #include "codegen.h"
-#include "symbol.h"
+#include "error_handler.h"
 #include "log.h"
+#include "parser.h"
+#include "symbol.h"
 
-int compile_f9s(const char *filename, 
+int compile_f9s(const char *filename,
                 struct symbol_table *table,
                 char *exe_path_out,
                 size_t exe_path_size) {
@@ -40,7 +50,8 @@ int compile_f9s(const char *filename,
 
     size_t read_size = fread(buffer, 1, size, f);
     fclose(f);
-    buffer[read_size] = '\n';
+    /* Ensure the source ends with a newline so the lexer always terminates */
+    buffer[read_size]     = '\n';
     buffer[read_size + 1] = '\0';
 
     struct ast_node *ast = parse_program(filename, &buffer);
@@ -55,14 +66,11 @@ int compile_f9s(const char *filename,
         return -1;
     }
 
-    char asm_name[256];
-    char obj_name[256];
-    char exe_name[256];
-    
-    /* Strip .f9s extension */
+    /* Derive output file names by stripping the .f9s extension */
+    char asm_name[256], obj_name[256], exe_name[256];
     int base_len = (int)(strlen(filename) - 4);
     if (base_len < 0) base_len = (int)strlen(filename);
-    
+
     snprintf(asm_name, sizeof(asm_name), "%.*s.asm", base_len, filename);
     snprintf(obj_name, sizeof(obj_name), "%.*s.obj", base_len, filename);
     snprintf(exe_name, sizeof(exe_name), "%.*s.exe", base_len, filename);
@@ -74,7 +82,7 @@ int compile_f9s(const char *filename,
         return -1;
     }
 
-    /* Assemble */
+    /* Assemble with NASM */
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "nasm -f win64 %s -o %s 2>nul", asm_name, obj_name);
     if (system(cmd) != 0) {
@@ -84,7 +92,7 @@ int compile_f9s(const char *filename,
         return -1;
     }
 
-    /* Link */
+    /* Link with Clang */
     snprintf(cmd, sizeof(cmd), "clang -m64 %s -o %s 2>nul", obj_name, exe_name);
     if (system(cmd) != 0) {
         slap("Linking failed");
@@ -93,10 +101,8 @@ int compile_f9s(const char *filename,
         return -1;
     }
 
-    /* Return exe path if requested */
-    if (exe_path_out && exe_path_size > 0) {
+    if (exe_path_out && exe_path_size > 0)
         snprintf(exe_path_out, exe_path_size, "%s", exe_name);
-    }
 
     char msg[256];
     snprintf(msg, sizeof(msg), "Compiled %s -> %s", filename, exe_name);
@@ -108,9 +114,6 @@ int compile_f9s(const char *filename,
     return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/*  build_file - compile only, no execution                          */
-/* ------------------------------------------------------------------ */
 int build_file(const char *filename, struct symbol_table *table) {
     return compile_f9s(filename, table, NULL, 0);
 }

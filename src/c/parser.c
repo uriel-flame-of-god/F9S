@@ -1,3 +1,29 @@
+/**
+ * @file parser.c
+ * @brief Recursive-descent lexer, parser, and semantic analyser for F9S.
+ *
+ * ## Lexer
+ * A hand-written single-pass lexer produces a stream of `token` values.
+ * One token of lookahead is supported via `lexer.has_lookahead`.
+ * The `::` and `:=` digraphs are handled in `next_token`.
+ *
+ * ## Parser
+ * `parse_statement` dispatches on the current keyword or pattern:
+ *  - `PROGRAM` / `END PROGRAM`
+ *  - `INTEGER|REAL|STRING|LOGICAL|COMPLEX :: name` (explicit assign or array decl)
+ *  - `HASHMAP :: name`
+ *  - `ASSIGN name, expr` and `name = expr` (implicit assign)
+ *  - `name(idx) := expr` (hashmap insert) or `name(idx) = expr` (array assign)
+ *  - `PRINT *, expr` (including implied-DO `(expr, i=start,end)`)
+ *  - `IF (cond) THEN … [ELSE …] END IF`
+ *  - `DO i = start, end [, step] … END DO`
+ *  - `STOP`
+ *
+ * ## Semantic analysis
+ * `semantic_analysis` walks the AST once, resolving variable references
+ * and filling `ast_node.variable.symbol` pointers from `table`.
+ */
+
 // F9S - FORTRAN 95 Subset Compiler
 // Copyright (C) 2026 Debaditya Malakar
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -47,6 +73,8 @@ typedef enum {
     TOK_KW_ELSE,
     TOK_KW_DO,
     TOK_KW_STOP,
+    TOK_KW_HASHMAP,     /* HASHMAP keyword */
+    TOK_DCOLON,         /* :: */
     TOK_EQUALS,         /* =   (DO variable assignment) */
     TOK_EQ,             /* ==  */
     TOK_NE,             /* /=  */
@@ -118,6 +146,7 @@ static token_type classify_ident(const char *text) {
     if (ci_eq(text, "ELSE"))     return TOK_KW_ELSE;
     if (ci_eq(text, "DO"))       return TOK_KW_DO;
     if (ci_eq(text, "STOP"))     return TOK_KW_STOP;
+    if (ci_eq(text, "HASHMAP"))  return TOK_KW_HASHMAP;
     return TOK_IDENT;
 }
 
@@ -245,12 +274,14 @@ static token lexer_next_raw(lexer *l) {
         return t;
     }
 
-    /* Two-char operators */
-    if (*l->pos == ':' && *(l->pos + 1) == '=') {
-        t.type = TOK_ASSIGN_OP;
-        strcpy(t.text, ":=");
-        l->pos += 2;
-        return t;
+    /* Two-char operators starting with ':' */
+    if (*l->pos == ':') {
+        if (*(l->pos + 1) == ':') {
+            t.type = TOK_DCOLON; strcpy(t.text, "::"); l->pos += 2; return t;
+        }
+        if (*(l->pos + 1) == '=') {
+            t.type = TOK_ASSIGN_OP; strcpy(t.text, ":="); l->pos += 2; return t;
+        }
     }
 
     /* Single-char and comparison tokens */
@@ -365,6 +396,33 @@ void ast_destroy(struct ast_node *node) {
         ast_destroy(node->data.do_loop.body);
         break;
     case AST_STOP:
+        break;
+    case AST_ARRAY_DECL:
+        free(node->data.array_decl.name);
+        break;
+    case AST_ARRAY_ASSIGN:
+        free(node->data.array_assign.name);
+        ast_destroy(node->data.array_assign.index_expr);
+        ast_destroy(node->data.array_assign.value_expr);
+        break;
+    case AST_ARRAY_REF:
+        free(node->data.array_ref.name);
+        ast_destroy(node->data.array_ref.index_expr);
+        break;
+    case AST_HASHMAP_DECL:
+        free(node->data.hashmap_decl.name);
+        break;
+    case AST_HASHMAP_INSERT:
+        free(node->data.hashmap_insert.name);
+        ast_destroy(node->data.hashmap_insert.key_expr);
+        ast_destroy(node->data.hashmap_insert.value_expr);
+        break;
+    case AST_IMPLIED_DO:
+        ast_destroy(node->data.implied_do.expr);
+        free(node->data.implied_do.var_name);
+        ast_destroy(node->data.implied_do.start_expr);
+        ast_destroy(node->data.implied_do.end_expr);
+        ast_destroy(node->data.implied_do.step_expr);
         break;
     }
     free(node);
@@ -500,12 +558,25 @@ static struct ast_node *parse_primary(parser_state *p) {
         return inner;
     }
 
-    /* Identifier / variable reference */
+    /* Identifier / variable reference or array/hashmap subscript */
     if (t.type == TOK_IDENT) {
-        lexer_consume(&p->lex);
+        token name_tok = lexer_consume(&p->lex);
+        /* Check for subscript: arr(i) or map(key) */
+        if (lexer_peek(&p->lex).type == TOK_LPAREN) {
+            lexer_consume(&p->lex);
+            struct ast_node *idx = parse_expression(p);
+            if (!idx || p->error) return NULL;
+            expect(p, TOK_RPAREN, "')'");
+            if (p->error) { ast_destroy(idx); return NULL; }
+            struct ast_node *n = ast_node_alloc(AST_ARRAY_REF);
+            if (!n) { ast_destroy(idx); return NULL; }
+            n->data.array_ref.name       = strdup(name_tok.text);
+            n->data.array_ref.index_expr = idx;
+            return n;
+        }
         struct ast_node *n = ast_node_alloc(AST_VARIABLE);
         if (!n) return NULL;
-        n->data.variable.name   = strdup(t.text);
+        n->data.variable.name   = strdup(name_tok.text);
         n->data.variable.symbol = NULL;  /* filled in semantic pass */
         return n;
     }
@@ -628,6 +699,109 @@ static struct ast_node *parse_comparison(parser_state *p) {
 }
 
 static struct ast_node *parse_statement(parser_state *p);
+
+/* ------------------------------------------------------------------ */
+/*  Implied-DO helper                                                 */
+/* ------------------------------------------------------------------ */
+
+/* Scan forward to see if the next ( ... ) looks like an implied DO.
+ * Returns 1 if ( expr, IDENT = ... ) pattern found, without consuming. */
+static int looks_like_implied_do(lexer *l) {
+    const char *saved_pos = l->pos;
+    int saved_line = l->line;
+    token saved_la = l->lookahead;
+    int saved_has = l->has_lookahead;
+
+    if (lexer_peek(l).type != TOK_LPAREN) {
+        return 0;
+    }
+    lexer_consume(l); /* ( */
+    int depth = 0;
+    for (;;) {
+        token t = lexer_next_raw(l);
+        if (t.type == TOK_EOF || t.type == TOK_NEWLINE) break;
+        if (t.type == TOK_LPAREN) { depth++; continue; }
+        if (t.type == TOK_RPAREN) {
+            if (depth == 0) break;
+            depth--;
+            continue;
+        }
+        if (t.type == TOK_COMMA && depth == 0) {
+            token id = lexer_next_raw(l);
+            if (id.type == TOK_IDENT) {
+                token eq = lexer_next_raw(l);
+                if (eq.type == TOK_EQUALS) {
+                    l->pos = saved_pos; l->line = saved_line;
+                    l->lookahead = saved_la; l->has_lookahead = saved_has;
+                    return 1;
+                }
+            }
+        }
+    }
+    l->pos = saved_pos; l->line = saved_line;
+    l->lookahead = saved_la; l->has_lookahead = saved_has;
+    return 0;
+}
+
+/* Try to parse ( expr, var = start, end [, step] ).
+ * Returns AST_IMPLIED_DO node on success, NULL if not an implied DO. */
+static struct ast_node *try_parse_implied_do(parser_state *p) {
+    if (!looks_like_implied_do(&p->lex)) return NULL;
+
+    lexer_consume(&p->lex); /* ( */
+
+    struct ast_node *expr = parse_expression(p);
+    if (!expr || p->error) return NULL;
+
+    expect(p, TOK_COMMA, "','");
+    if (p->error) { ast_destroy(expr); return NULL; }
+
+    token var_tok = expect(p, TOK_IDENT, "implied-DO variable");
+    if (p->error) { ast_destroy(expr); return NULL; }
+
+    token eq = lexer_consume(&p->lex);
+    if (eq.type != TOK_EQUALS) {
+        parse_err(p, "Expected '=' in implied-DO, got '%s'", eq.text);
+        ast_destroy(expr); return NULL;
+    }
+
+    struct ast_node *start = parse_expression(p);
+    if (!start || p->error) { ast_destroy(expr); return NULL; }
+
+    expect(p, TOK_COMMA, "','");
+    if (p->error) { ast_destroy(expr); ast_destroy(start); return NULL; }
+
+    struct ast_node *end = parse_expression(p);
+    if (!end || p->error) { ast_destroy(expr); ast_destroy(start); return NULL; }
+
+    struct ast_node *step = NULL;
+    if (lexer_peek(&p->lex).type == TOK_COMMA) {
+        lexer_consume(&p->lex);
+        step = parse_expression(p);
+        if (!step || p->error) {
+            ast_destroy(expr); ast_destroy(start); ast_destroy(end);
+            return NULL;
+        }
+    }
+
+    expect(p, TOK_RPAREN, "')'");
+    if (p->error) {
+        ast_destroy(expr); ast_destroy(start); ast_destroy(end); ast_destroy(step);
+        return NULL;
+    }
+
+    struct ast_node *n = ast_node_alloc(AST_IMPLIED_DO);
+    if (!n) {
+        ast_destroy(expr); ast_destroy(start); ast_destroy(end); ast_destroy(step);
+        return NULL;
+    }
+    n->data.implied_do.expr       = expr;
+    n->data.implied_do.var_name   = strdup(var_tok.text);
+    n->data.implied_do.start_expr = start;
+    n->data.implied_do.end_expr   = end;
+    n->data.implied_do.step_expr  = step;
+    return n;
+}
 
 /* Parse a list of statements until ELSE, END, or EOF (does NOT consume
  * the terminator token — the caller is responsible for that). */
@@ -810,13 +984,57 @@ static struct ast_node *parse_statement(parser_state *p) {
     skip_newlines(&p->lex);
     token t = lexer_peek(&p->lex);
 
-    /* Explicit declaration: INTEGER x := expr */
+    /* Type declarations: INTEGER x := expr  OR  INTEGER :: arr(10) / INTEGER :: x */
     if (t.type == TOK_KW_INTEGER || t.type == TOK_KW_REAL   ||
         t.type == TOK_KW_STRING  || t.type == TOK_KW_LOGICAL ||
         t.type == TOK_KW_COMPLEX) {
         lexer_consume(&p->lex);
         enum type_kind decl_type = token_to_type(t.type);
 
+        /* Check for FORTRAN 95 style: TYPE :: name[(size)] */
+        if (lexer_peek(&p->lex).type == TOK_DCOLON) {
+            lexer_consume(&p->lex);  /* consume :: */
+            token name_tok = expect(p, TOK_IDENT, "variable name");
+            if (p->error) return NULL;
+
+            if (lexer_peek(&p->lex).type == TOK_LPAREN) {
+                /* Array declaration: INTEGER :: arr(size) */
+                lexer_consume(&p->lex);  /* ( */
+                token size_tok = expect(p, TOK_INT_LIT, "array size");
+                if (p->error) return NULL;
+                expect(p, TOK_RPAREN, "')'");
+                if (p->error) return NULL;
+
+                struct ast_node *n = ast_node_alloc(AST_ARRAY_DECL);
+                if (!n) return NULL;
+                n->data.array_decl.name      = strdup(name_tok.text);
+                n->data.array_decl.elem_type = decl_type;
+                n->data.array_decl.size      = (int)strtol(size_tok.text, NULL, 10);
+                return n;
+            } else {
+                /* Scalar declaration with :: — check for optional initializer */
+                struct ast_node *val = NULL;
+                if (lexer_peek(&p->lex).type == TOK_ASSIGN_OP) {
+                    lexer_consume(&p->lex);
+                    val = parse_expression(p);
+                    if (!val || p->error) return NULL;
+                } else {
+                    /* Zero-initialize */
+                    val = ast_node_alloc(AST_LITERAL);
+                    if (!val) return NULL;
+                    val->data.literal.type = decl_type;
+                    val->data.literal.value.int_val = 0LL;
+                }
+                struct ast_node *n = ast_node_alloc(AST_ASSIGN_EXPLICIT);
+                if (!n) { ast_destroy(val); return NULL; }
+                n->data.assign.var_name      = strdup(name_tok.text);
+                n->data.assign.declared_type = decl_type;
+                n->data.assign.value         = val;
+                return n;
+            }
+        }
+
+        /* Original style: INTEGER x := expr */
         token name_tok = expect(p, TOK_IDENT, "variable name");
         if (p->error) return NULL;
 
@@ -854,16 +1072,94 @@ static struct ast_node *parse_statement(parser_state *p) {
         return n;
     }
 
-    /* PRINT expr */
+    /* PRINT *, expr  or  PRINT *, (implied DO) */
     if (t.type == TOK_KW_PRINT) {
         lexer_consume(&p->lex);
+        /* Optional `* ,` format specifier */
+        if (lexer_peek(&p->lex).type == TOK_STAR) {
+            lexer_consume(&p->lex);
+            if (lexer_peek(&p->lex).type == TOK_COMMA)
+                lexer_consume(&p->lex);
+        }
+        /* Check for implied DO: ( expr, var = start, end ) */
+        struct ast_node *ido = try_parse_implied_do(p);
+        if (ido) {
+            struct ast_node *n = ast_node_alloc(AST_PRINT);
+            if (!n) { ast_destroy(ido); return NULL; }
+            n->data.print.expr = ido;
+            return n;
+        }
         struct ast_node *expr = parse_expression(p);
         if (!expr || p->error) return NULL;
-
         struct ast_node *n = ast_node_alloc(AST_PRINT);
         if (!n) { ast_destroy(expr); return NULL; }
         n->data.print.expr = expr;
         return n;
+    }
+
+    /* HASHMAP :: map */
+    if (t.type == TOK_KW_HASHMAP) {
+        lexer_consume(&p->lex);
+        expect(p, TOK_DCOLON, "'::'");
+        if (p->error) return NULL;
+        token name_tok = expect(p, TOK_IDENT, "hashmap name");
+        if (p->error) return NULL;
+        struct ast_node *n = ast_node_alloc(AST_HASHMAP_DECL);
+        if (!n) return NULL;
+        n->data.hashmap_decl.name = strdup(name_tok.text);
+        return n;
+    }
+
+    /* IDENT-led statements: arr(i) = expr, map(key) := expr, x = expr */
+    if (t.type == TOK_IDENT) {
+        token name_tok = lexer_consume(&p->lex);
+        token next = lexer_peek(&p->lex);
+
+        if (next.type == TOK_LPAREN) {
+            /* arr(i) = expr  OR  map(key) := expr */
+            lexer_consume(&p->lex);  /* ( */
+            struct ast_node *idx = parse_expression(p);
+            if (!idx || p->error) return NULL;
+            expect(p, TOK_RPAREN, "')'");
+            if (p->error) { ast_destroy(idx); return NULL; }
+            token op = lexer_consume(&p->lex);
+            struct ast_node *val = parse_expression(p);
+            if (!val || p->error) { ast_destroy(idx); return NULL; }
+            if (op.type == TOK_EQUALS) {
+                struct ast_node *n = ast_node_alloc(AST_ARRAY_ASSIGN);
+                if (!n) { ast_destroy(idx); ast_destroy(val); return NULL; }
+                n->data.array_assign.name        = strdup(name_tok.text);
+                n->data.array_assign.index_expr  = idx;
+                n->data.array_assign.value_expr  = val;
+                return n;
+            } else if (op.type == TOK_ASSIGN_OP) {
+                struct ast_node *n = ast_node_alloc(AST_HASHMAP_INSERT);
+                if (!n) { ast_destroy(idx); ast_destroy(val); return NULL; }
+                n->data.hashmap_insert.name       = strdup(name_tok.text);
+                n->data.hashmap_insert.key_expr   = idx;
+                n->data.hashmap_insert.value_expr = val;
+                return n;
+            } else {
+                parse_err(p, "Expected '=' or ':=' after '%s(...)'", name_tok.text);
+                ast_destroy(idx); ast_destroy(val);
+                return NULL;
+            }
+        } else if (next.type == TOK_EQUALS) {
+            /* x = expr  (scalar assignment, FORTRAN 95 style) */
+            lexer_consume(&p->lex);
+            struct ast_node *val = parse_expression(p);
+            if (!val || p->error) return NULL;
+            struct ast_node *n = ast_node_alloc(AST_ASSIGN_IMPLICIT);
+            if (!n) { ast_destroy(val); return NULL; }
+            n->data.assign.var_name      = strdup(name_tok.text);
+            n->data.assign.declared_type = TYPE_UNKNOWN;
+            n->data.assign.value         = val;
+            return n;
+        } else {
+            parse_err(p, "Unexpected token '%s' after identifier '%s'",
+                      next.text, name_tok.text);
+            return NULL;
+        }
     }
 
     /* IF (condition) THEN ... [ELSE ...] END IF */
@@ -954,6 +1250,15 @@ static int sem_expr(struct ast_node *node, struct symbol_table *table) {
         return 0;
     case AST_LITERAL:
         return 0;
+    case AST_ARRAY_REF:
+        return sem_expr(node->data.array_ref.index_expr, table);
+    case AST_IMPLIED_DO:
+        sem_expr(node->data.implied_do.expr,       table);
+        sem_expr(node->data.implied_do.start_expr, table);
+        sem_expr(node->data.implied_do.end_expr,   table);
+        if (node->data.implied_do.step_expr)
+            sem_expr(node->data.implied_do.step_expr, table);
+        return 0;
     default:
         return 0;
     }
@@ -978,6 +1283,20 @@ static void sem_collect_decls(struct ast_node *stmts, struct symbol_table *table
         } else if (s->type == AST_IF) {
             sem_collect_decls(s->data.if_stmt.then_body, table);
             sem_collect_decls(s->data.if_stmt.else_body, table);
+        } else if (s->type == AST_ARRAY_DECL) {
+            symbol_insert(table, s->data.array_decl.name,
+                          s->data.array_decl.elem_type, NULL);
+        } else if (s->type == AST_HASHMAP_DECL) {
+            symbol_insert(table, s->data.hashmap_decl.name,
+                          TYPE_UNKNOWN, NULL);
+        } else if (s->type == AST_PRINT) {
+            /* Register implied DO control variable if present */
+            if (s->data.print.expr &&
+                s->data.print.expr->type == AST_IMPLIED_DO) {
+                symbol_insert(table,
+                              s->data.print.expr->data.implied_do.var_name,
+                              TYPE_INT, NULL);
+            }
         }
     }
 }
@@ -1003,10 +1322,6 @@ int semantic_analysis(struct ast_node *ast, struct symbol_table *table) {
                 struct symbol *sym = symbol_lookup(table, s->data.assign.var_name);
                 if (sym) sym->type = s->data.assign.declared_type;
             }
-            break;
-        case AST_PRINT:
-            if (sem_expr(s->data.print.expr, table) < 0)
-                result = -1;
             break;
         case AST_IF:
             if (sem_expr(s->data.if_stmt.condition, table) < 0)
@@ -1059,6 +1374,26 @@ int semantic_analysis(struct ast_node *ast, struct symbol_table *table) {
             break;
         }
         case AST_STOP:
+            break;
+        case AST_ARRAY_DECL:
+        case AST_HASHMAP_DECL:
+            break;
+        case AST_ARRAY_ASSIGN:
+            sem_expr(s->data.array_assign.index_expr, table);
+            sem_expr(s->data.array_assign.value_expr, table);
+            break;
+        case AST_HASHMAP_INSERT:
+            sem_expr(s->data.hashmap_insert.key_expr,   table);
+            sem_expr(s->data.hashmap_insert.value_expr, table);
+            break;
+        case AST_PRINT:
+            if (s->data.print.expr &&
+                s->data.print.expr->type == AST_IMPLIED_DO) {
+                sem_expr(s->data.print.expr, table);
+            } else {
+                if (sem_expr(s->data.print.expr, table) < 0)
+                    result = -1;
+            }
             break;
         default:
             break;

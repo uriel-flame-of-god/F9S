@@ -1,3 +1,13 @@
+/**
+ * @file assignment.c
+ * @brief Type conversion and assignment helpers.
+ *
+ * Handles all cross-type conversions used by the semantic-analysis pass.
+ * Lossy conversions (e.g. REAL → INTEGER) emit a `pat()` warning.
+ * Incompatible conversions (e.g. STRING → LOGICAL) call `slap()` and
+ * return -1 without modifying the destination.
+ */
+
 // F9S - FORTRAN 95 Subset Compiler
 // Copyright (C) 2026 Debaditya Malakar
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -12,11 +22,11 @@
 #include "symbol.h"
 #include "types.h"
 
+/** @brief Shorthand for the complex value struct used throughout this file. */
 typedef struct { double real; double imag; } complex_val;
 
 enum type_kind get_literal_type(const char *literal) {
-    int kind = detect_type(literal);
-    return (enum type_kind)kind;
+    return (enum type_kind)detect_type(literal);
 }
 
 int convert_value(void          *dest,
@@ -36,7 +46,6 @@ int convert_value(void          *dest,
             break;
         case TYPE_STRING:
         case TYPE_CHARACTER:
-            /* Caller is responsible for allocating dest buffer */
             strcpy((char *)dest, (const char *)src);
             break;
         case TYPE_COMPLEX:
@@ -48,10 +57,10 @@ int convert_value(void          *dest,
         return 0;
     }
 
-    /* ---- source helpers ----------------------------------------- */
-    long long  src_int    = 0;
-    double     src_real   = 0.0;
-    long long  src_logic  = 0;
+    /* Extract source helpers for cross-type conversions */
+    long long   src_int   = 0;
+    double      src_real  = 0.0;
+    long long   src_logic = 0;
     complex_val src_cx    = {0.0, 0.0};
 
     switch (src_type) {
@@ -87,10 +96,9 @@ int convert_value(void          *dest,
         break;
     }
 
-    /* ---- conversion matrix -------------------------------------- */
     switch (dest_type) {
 
-    /* ========================= → INTEGER ========================= */
+    /* =================== → INTEGER =================== */
     case TYPE_INT:
         switch (src_type) {
         case TYPE_REAL:
@@ -127,17 +135,15 @@ int convert_value(void          *dest,
             slap("Cannot convert STRING \"%s\" to INTEGER", s);
             return -1;
         }
-        default:
-            break;
+        default: break;
         }
         break;
 
-    /* ========================== → REAL =========================== */
+    /* =================== → REAL =================== */
     case TYPE_REAL:
         switch (src_type) {
         case TYPE_INT:
-            pat("Widened INTEGER %lld to REAL (%.6g)",
-                src_int, (double)src_int);
+            pat("Widened INTEGER %lld to REAL (%.6g)", src_int, (double)src_int);
             if (pat_count) (*pat_count)++;
             *(double *)dest = (double)src_int;
             return 0;
@@ -169,12 +175,11 @@ int convert_value(void          *dest,
             slap("Cannot convert STRING \"%s\" to REAL", s);
             return -1;
         }
-        default:
-            break;
+        default: break;
         }
         break;
 
-    /* ========================= → LOGICAL ========================= */
+    /* =================== → LOGICAL =================== */
     case TYPE_LOGICAL:
         switch (src_type) {
         case TYPE_INT:
@@ -191,8 +196,7 @@ int convert_value(void          *dest,
             return 0;
         case TYPE_STRING:
         case TYPE_CHARACTER:
-            slap("Cannot convert STRING \"%s\" to LOGICAL",
-                 (const char *)src);
+            slap("Cannot convert STRING \"%s\" to LOGICAL", (const char *)src);
             return -1;
         case TYPE_COMPLEX:
             pat("Converted COMPLEX (%.6g+%.6gi) to LOGICAL (.%s.)",
@@ -201,16 +205,16 @@ int convert_value(void          *dest,
             if (pat_count) (*pat_count)++;
             *(long long *)dest = src_logic;
             return 0;
-        default:
-            break;
+        default: break;
         }
         break;
 
-    /* ========================= → COMPLEX ========================= */
+    /* =================== → COMPLEX =================== */
     case TYPE_COMPLEX:
         switch (src_type) {
         case TYPE_INT:
-            pat("Widened INTEGER %lld to COMPLEX (%.6g+0.0i)", src_int, (double)src_int);
+            pat("Widened INTEGER %lld to COMPLEX (%.6g+0.0i)",
+                src_int, (double)src_int);
             if (pat_count) (*pat_count)++;
             ((complex_val *)dest)->real = (double)src_int;
             ((complex_val *)dest)->imag = 0.0;
@@ -232,15 +236,13 @@ int convert_value(void          *dest,
         case TYPE_CHARACTER:
             slap("Cannot convert STRING \"%s\" to COMPLEX", (const char *)src);
             return -1;
-        default:
-            break;
+        default: break;
         }
         break;
 
-    /* ===================== → STRING / CHARACTER ================== */
+    /* =================== → STRING / CHARACTER =================== */
     case TYPE_STRING:
     case TYPE_CHARACTER:
-        /* We never silently stringify; always a slap */
         slap("Cannot implicitly convert to STRING");
         return -1;
 
@@ -252,10 +254,6 @@ int convert_value(void          *dest,
     return -1;
 }
 
-/* ------------------------------------------------------------------ */
-/*  handle_explicit_assignment                                        */
-/* ------------------------------------------------------------------ */
-
 int handle_explicit_assignment(struct symbol_table *table,
                                const char          *var_name,
                                enum type_kind        declared_type,
@@ -263,7 +261,6 @@ int handle_explicit_assignment(struct symbol_table *table,
                                enum type_kind        value_type) {
     if (!table || !var_name) return -1;
 
-    /* Allocate a conversion buffer large enough for any type */
     union {
         long long  i;
         double     r;
@@ -276,9 +273,8 @@ int handle_explicit_assignment(struct symbol_table *table,
     int   pats        = 0;
 
     if (value_type != declared_type) {
-        if (convert_value(&converted, declared_type, value, value_type, &pats) < 0) {
-            return -1;  /* slap already issued */
-        }
+        if (convert_value(&converted, declared_type, value, value_type, &pats) < 0)
+            return -1;
         final_value = &converted;
     }
 
@@ -289,21 +285,15 @@ int handle_explicit_assignment(struct symbol_table *table,
     return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/*  handle_implicit_assignment                                        */
-/* ------------------------------------------------------------------ */
-
 int handle_implicit_assignment(struct symbol_table *table,
                                const char          *var_name,
                                void                *value,
                                enum type_kind        value_type) {
     if (!table || !var_name) return -1;
 
-    /* Check if variable already exists with a different type */
     struct symbol *existing = symbol_lookup(table, var_name);
 
     if (existing && existing->type != value_type) {
-        /* Attempt promotion */
         union {
             long long  i;
             double     r;
@@ -313,9 +303,8 @@ int handle_implicit_assignment(struct symbol_table *table,
         memset(&converted, 0, sizeof(converted));
         int pats = 0;
 
-        if (convert_value(&converted, existing->type, value, value_type, &pats) < 0) {
+        if (convert_value(&converted, existing->type, value, value_type, &pats) < 0)
             return -1;
-        }
 
         if (!symbol_insert(table, var_name, existing->type, &converted)) {
             slap("Out of memory updating variable '%s'", var_name);
@@ -324,7 +313,6 @@ int handle_implicit_assignment(struct symbol_table *table,
         return 0;
     }
 
-    /* New variable or same type — just insert/update directly */
     if (!symbol_insert(table, var_name, value_type, value)) {
         slap("Out of memory inserting variable '%s'", var_name);
         return -1;
