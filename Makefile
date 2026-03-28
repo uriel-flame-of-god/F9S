@@ -23,3 +23,7 @@ dirs:
 clean:
 	@if exist $(OBJ_DIR) rmdir /s /q $(OBJ_DIR)
 	@if exist $(BIN_DIR) rmdir /s /q $(BIN_DIR)
+	@if exist *.exe del /q *.exe
+	@if exist *.obj del /q *.obj
+	@if exist examples\*.exe del /q examples\*.exe
+	@if exist examples\*.obj del /q examples\*.obj

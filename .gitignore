@@ -12,3 +12,6 @@ test*.*
 vscode-f9s/node_modules/
 vscode-f9s/out/
 .claude/
+examples/*.asm
+examples/*.exe
+examples/*.obj

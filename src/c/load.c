@@ -23,6 +23,24 @@
 /** @brief Lazily-initialised symbol table shared across REPL compilations. */
 static struct symbol_table *g_symbol_table = NULL;
 
+static int is_absolute_path(const char *path) {
+    if (!path || !*path) return 0;
+    if (path[0] == '\\' || path[0] == '/') return 1;
+    return isalpha((unsigned char)path[0]) && path[1] == ':';
+}
+
+static void normalize_path_separators(const char *in, char *out, size_t out_size) {
+    if (!out || out_size == 0) return;
+    size_t i = 0;
+    if (!in) {
+        out[0] = '\0';
+        return;
+    }
+    for (; in[i] && i + 1 < out_size; i++)
+        out[i] = (in[i] == '/') ? '\\' : in[i];
+    out[i] = '\0';
+}
+
 /**
  * @brief Extract the filename argument from a dot-command line.
  *
@@ -81,7 +99,19 @@ int load_file(const char *filename, struct symbol_table *table) {
     snprintf(msg, sizeof(msg), "Running %s...", exe_path);
     log_info(msg);
 
-    int result = system(exe_path);
+    char exe_norm[256];
+    normalize_path_separators(exe_path, exe_norm, sizeof(exe_norm));
+
+    char run_path[300];
+    if (!is_absolute_path(exe_norm) && exe_norm[0] != '.')
+        snprintf(run_path, sizeof(run_path), ".\\%s", exe_norm);
+    else
+        snprintf(run_path, sizeof(run_path), "%s", exe_norm);
+
+    char run_cmd[340];
+    snprintf(run_cmd, sizeof(run_cmd), "\"%s\"", run_path);
+
+    int result = system(run_cmd);
     if (result != 0) {
         snprintf(msg, sizeof(msg), "Program exited with code %d", result);
         log_warn(msg);
